@@ -1,0 +1,27 @@
+# scorer.yaml
+# -----------
+# Monetization scorer configuration — v1.1
+# Edit weights and percentile_tiers here, or use the v1.2 interactive UI
+# to generate this file automatically.
+#
+# Rules:
+#   - weights must sum to exactly 1.00
+#   - A-tier percentile must be > B-tier > C-tier
+
+weights:
+  audience:             0.20   # follower tier + follower/following ratio
+  engagement:           0.20   # (likes + replies + reposts) / followers / posts
+  cta_density:          0.18   # fraction of posts containing CTA keywords
+  comment_follower:     0.25   # avg replies / follower count — community signal
+  monetization_intent:  0.12   # bio link, contact cue, external URL, account type
+  credibility:          0.05   # verified status + large follower tier
+  # sum: 1.00
+
+percentile_tiers:
+  A-tier: 85            # top 15% of scored batch
+  B-tier: 60            # top 40% of scored batch
+  C-tier: 25            # top 75% of scored batch
+  # below 25th percentile → filtered
+
+min_follower_count: 500         # accounts below this are auto-filtered before scoring
+min_posts_required: 3           # accounts with fewer posts are auto-filtered
