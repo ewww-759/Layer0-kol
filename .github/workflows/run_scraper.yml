@@ -50,11 +50,11 @@ jobs:
           echo "LOG_LEVEL=INFO" >> .env
 
       - name: Debug search API
+        env:
+          THREADS_COOKIE: ${{ secrets.THREADS_COOKIE }}
         run: |
-          python3 << 'PYEOF'
+          python3 -c "
           import requests, os
-          from dotenv import load_dotenv
-          load_dotenv()
           cookie = os.environ.get('THREADS_COOKIE', '')
           print('Cookie length:', len(cookie))
           print('Cookie preview:', cookie[:80] if cookie else 'EMPTY')
@@ -68,15 +68,14 @@ jobs:
               'Sec-Fetch-Mode': 'cors',
               'Sec-Fetch-Site': 'same-origin',
           }
-          r = requests.get(
-              'https://www.threads.net/api/v1/users/search/?q=tarot&count=5',
-              headers=headers, timeout=15
-          )
+          r = requests.get('https://www.threads.net/api/v1/users/search/?q=tarot&count=5', headers=headers, timeout=15)
           print('Status:', r.status_code)
           print('Response:', r.text[:500])
-          PYEOF
+          "
 
       - name: Run scraper
+        env:
+          THREADS_COOKIE: ${{ secrets.THREADS_COOKIE }}
         run: python src/main.py --mode discover --no-outreach
 
       - name: Upload results
