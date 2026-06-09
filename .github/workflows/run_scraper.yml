@@ -49,6 +49,33 @@ jobs:
           echo "THREADS_COOKIE=${{ secrets.THREADS_COOKIE }}" > .env
           echo "LOG_LEVEL=INFO" >> .env
 
+      - name: Debug search API
+        run: |
+          python3 << 'PYEOF'
+          import requests, os
+          from dotenv import load_dotenv
+          load_dotenv()
+          cookie = os.environ.get('THREADS_COOKIE', '')
+          print('Cookie length:', len(cookie))
+          print('Cookie preview:', cookie[:80] if cookie else 'EMPTY')
+          headers = {
+              'Cookie': cookie,
+              'X-IG-App-ID': '238260118697367',
+              'Accept': '*/*',
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Sec-Fetch-Dest': 'empty',
+              'Sec-Fetch-Mode': 'cors',
+              'Sec-Fetch-Site': 'same-origin',
+          }
+          r = requests.get(
+              'https://www.threads.net/api/v1/users/search/?q=tarot&count=5',
+              headers=headers, timeout=15
+          )
+          print('Status:', r.status_code)
+          print('Response:', r.text[:500])
+          PYEOF
+
       - name: Run scraper
         run: python src/main.py --mode discover --no-outreach
 
