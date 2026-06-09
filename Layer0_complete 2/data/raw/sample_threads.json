@@ -1,0 +1,62 @@
+[
+  {
+    "id": "sample_tarot_001",
+    "username": "tarotbytara",
+    "text": "🌙 Daily tarot pull — link in bio for your full reading! DM me for collabs.",
+    "like_count": 842,
+    "reply_count": 67,
+    "repost_count": 34,
+    "created_at": 1700000000,
+    "url": "https://www.threads.net/@tarotbytara/post/sample_001"
+  },
+  {
+    "id": "sample_tarot_002",
+    "username": "tarotbytara",
+    "text": "Mercury retrograde is here 🌀 — use code RETRO20 for 20% off my readings.",
+    "like_count": 1203,
+    "reply_count": 94,
+    "repost_count": 61,
+    "created_at": 1699990000,
+    "url": "https://www.threads.net/@tarotbytara/post/sample_002"
+  },
+  {
+    "id": "sample_tarot_003",
+    "username": "tarotbytara",
+    "text": "Full moon in Scorpio giveaway 🔮 — shop now via link in bio to enter!",
+    "like_count": 2100,
+    "reply_count": 183,
+    "repost_count": 120,
+    "created_at": 1699980000,
+    "url": "https://www.threads.net/@tarotbytara/post/sample_003"
+  },
+  {
+    "id": "sample_astro_001",
+    "username": "daily_astro",
+    "text": "Your birth chart holds the answers ✨ Book a call with me — link in bio.",
+    "like_count": 560,
+    "reply_count": 41,
+    "repost_count": 22,
+    "created_at": 1700000100,
+    "url": "https://www.threads.net/@daily_astro/post/sample_004"
+  },
+  {
+    "id": "sample_astro_002",
+    "username": "daily_astro",
+    "text": "Rising sign thread 🧵 — comment yours below and I'll tell you what it means.",
+    "like_count": 980,
+    "reply_count": 210,
+    "repost_count": 88,
+    "created_at": 1699995000,
+    "url": "https://www.threads.net/@daily_astro/post/sample_005"
+  },
+  {
+    "id": "sample_astro_003",
+    "username": "daily_astro",
+    "text": "Free numerology guide — sign up via link in bio. No email needed.",
+    "like_count": 730,
+    "reply_count": 55,
+    "repost_count": 40,
+    "created_at": 1699985000,
+    "url": "https://www.threads.net/@daily_astro/post/sample_006"
+  }
+]

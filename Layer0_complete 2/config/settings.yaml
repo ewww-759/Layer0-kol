@@ -1,0 +1,16 @@
+# settings.yaml
+# -------------
+# General scraper settings
+
+base_url: "https://www.threads.net"
+timeout: 15
+use_offline: false        # set true to test without network (uses fixture data)
+use_proxies: false        # set true to rotate proxies from data/raw/proxies.json
+limit: 50
+
+# Default usernames — only used in --mode scrape without --usernames flag.
+# Leave empty when using --mode discover (seed_discoverer fills this).
+usernames: []
+
+# Optional cookie — can also be set via .env as THREADS_COOKIE (recommended)
+cookie: ""

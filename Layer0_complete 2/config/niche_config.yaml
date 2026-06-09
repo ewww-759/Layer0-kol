@@ -1,0 +1,111 @@
+# niche_config.yaml
+# ------------------
+# Niche configuration for fortune-telling KOL discovery.
+# Used by SeedDiscoverer (search_keywords) and NicheFilter (bio/post keywords).
+
+niche: fortune_telling
+
+# ── Stage 1: SeedDiscoverer ───────────────────────────────────────────────
+# Keywords fed into Threads search endpoint to find seed accounts.
+# Each keyword runs as a separate search. Results are deduplicated.
+# Accounts appearing in more keyword searches rank higher in output.
+
+search_keywords:
+  - "tarot"
+  - "yi ching"
+  - "astrology"
+  - "psychic reading"
+  - "numerology"
+  - "birth chart"
+  - "oracle card"
+  - "divination"
+  - "horoscope"
+  - "feng shui"
+
+# Max simultaneous keyword searches (safe ceiling = 3 for Threads)
+search_concurrent_workers: 3
+
+# Max accounts to pull per keyword search
+search_limit_per_keyword: 50
+
+# An account must appear in at least this many keyword searches
+# to be included in the seed list. Set to 1 to include all results.
+# Set to 2 to only include accounts that appear in 2+ keyword searches
+# (stronger niche signal, smaller seed list).
+min_keyword_hits: 1
+
+# What result types to extract usernames from
+search_result_types:
+  - users
+  - posts
+
+# ── Stage 3: NicheFilter ──────────────────────────────────────────────────
+# Bio keywords — matched against profile bio + full_name + username.
+# An account needs >= min_bio_keyword_hits matches to pass.
+
+bio_keywords:
+  - tarot
+  - astrology
+  - psychic
+  - oracle
+  - numerology
+  - horoscope
+  - divination
+  - clairvoyant
+  - crystal
+  - spiritual
+  - medium
+  - manifestation
+  - birth chart
+  - moon sign
+  - zodiac
+  - feng shui
+  - fortune
+  - yi ching
+  - i ching
+  - reading
+  - healer
+  - intuitive
+  - mystic
+  - esoteric
+  - cosmic
+
+# Post keywords — matched against post text across all scraped posts.
+# Each unique keyword counted once per post to avoid repetition bias.
+# An account needs >= min_post_keyword_hits total matches to pass.
+
+post_keywords:
+  - tarot
+  - astrology
+  - reading
+  - zodiac
+  - mercury retrograde
+  - full moon
+  - new moon
+  - rising sign
+  - energy
+  - manifest
+  - spirit
+  - universe
+  - psychic
+  - oracle
+  - numerology
+  - crystal
+  - chakra
+  - ritual
+  - yi ching
+  - i ching
+  - divination
+  - horoscope
+  - birth chart
+
+# Thresholds — tune these to tighten or loosen the filter
+# min_bio_keyword_hits: 1  = loose (any mention of a niche word passes)
+# min_bio_keyword_hits: 2  = moderate (recommended starting point)
+# min_bio_keyword_hits: 3  = strict (only dedicated niche accounts)
+
+min_bio_keyword_hits: 2
+min_post_keyword_hits: 3
+
+# Case-sensitive matching (false recommended — catches "Tarot" and "tarot")
+case_sensitive: false
