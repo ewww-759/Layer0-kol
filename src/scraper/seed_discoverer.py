@@ -44,7 +44,10 @@ class SeedDiscoverer:
         if config_path and Path(config_path).exists():
             self._load_config(Path(config_path))
 
-        self._max_workers = int(self._cfg.get("search_concurrent_workers", 3))
+        self._max_workers = int(self._cfg.get("search_concurrent_workers", 1))
+        # Force single-threaded execution to prevent instant 429s or bans when using a Cookie
+        self._max_workers = 1
+
         self._limit       = int(self._cfg.get("search_limit_per_keyword", 50))
         self._min_hits    = int(self._cfg.get("min_keyword_hits", 1))
 
@@ -184,10 +187,25 @@ class SeedDiscoverer:
             logger.debug(f"[seed] API search failed for '{keyword}': {e}")
             return []
 
+    def _extract_users_from_dict(self, data: Any, users: List[Dict[str, Any]], seen: Set[str]) -> None:
+        """Recursively traverse dicts/lists to safely extract user info containing pk and username."""
+        if isinstance(data, dict):
+            if ("pk" in data or "pk_id" in data or "id" in data) and "username" in data:
+                pk = data.get("pk") or data.get("pk_id") or data.get("id")
+                uname = str(data.get("username", "")).lower().strip()
+                if uname and uname not in seen and not uname.startswith("__"):
+                    seen.add(uname)
+                    users.append({"pk": str(pk), "username": uname})
+            for v in data.values():
+                self._extract_users_from_dict(v, users, seen)
+        elif isinstance(data, list):
+            for item in data:
+                self._extract_users_from_dict(item, users, seen)
+
     def _search_via_page_extract(self, keyword: str) -> List[Dict[str, Any]]:
         """
         Scrape /search?q={keyword} and extract user data from JSON blobs.
-        Attempts to find user objects with pk/username pairs.
+        Parses full JSON objects from script tags to avoid regex fragility.
         """
         try:
             resp = self._scraper._session.get(
@@ -208,18 +226,19 @@ class SeedDiscoverer:
             users: List[Dict[str, Any]] = []
             seen:  Set[str] = set()
 
-            # Try to extract JSON blobs containing user data
-            # Pattern: find {"pk":"12345","username":"name",...} objects
-            for m in re.finditer(
-                r'\{"pk"\s*:\s*"(\d+)"[^}]*"username"\s*:\s*"([^"]+)"',
-                html
-            ):
-                pk, uname = m.group(1), m.group(2).lower()
-                if uname not in seen:
-                    seen.add(uname)
-                    users.append({"pk": pk, "username": uname})
+            # Safely extract all JSON blobs inside <script> tags
+            script_blobs = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            for blob in script_blobs:
+                blob = blob.strip()
+                # Meta usually wraps state in {"require":...} or similar JSON
+                if blob.startswith('{') and blob.endswith('}') and '"username"' in blob:
+                    try:
+                        data = json.loads(blob)
+                        self._extract_users_from_dict(data, users, seen)
+                    except json.JSONDecodeError:
+                        pass
 
-            # Fallback: just extract usernames
+            # Fallback: loose extraction only if JSON parsing yields nothing
             if not users:
                 for m in re.finditer(r'"username"\s*:\s*"([^"]{2,30})"', html):
                     uname = m.group(1).lower().strip()

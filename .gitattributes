@@ -1,0 +1,12 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Python scripts
+*.py text diff=python
+
+# Markdown files
+*.md text diff=markdown
+
+# YAML configurations
+*.yaml text
+*.yml text

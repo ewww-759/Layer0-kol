@@ -184,15 +184,16 @@ def stage_scrape(
     settings:   Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """
-    For each username, fetch posts, profile, and comment summaries.
+    For each username, fetch posts concurrently via RSSHub, profile, and comment summaries.
     Returns a list of account dicts ready for niche filtering.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     accounts: List[Dict[str, Any]] = []
     limit = settings.get("limit", 50)
 
-    for username in usernames:
+    def process_user(username: str) -> Optional[Dict[str, Any]]:
         try:
-            logger.info(f"[main] Scraping @{username}")
+            logger.info(f"[main] Scraping @{username} via RSSHub")
 
             # Posts
             raw_items    = scraper.fetch_user_threads(username=username, limit=limit)
@@ -202,21 +203,33 @@ def stage_scrape(
 
             if not parsed_posts:
                 logger.warning(f"[main] No posts for @{username} — skipping")
-                continue
+                return None
 
             # Profile
             profile = profiler.fetch(username)
 
             # Comments (attach summary to each post)
-            enriched_posts = commenter.fetch_for_posts(parsed_posts, delay=1.0)
+            enriched_posts = commenter.fetch_for_posts(parsed_posts, delay=0.1)
 
-            accounts.append({
+            return {
                 "profile": profile,
                 "posts":   enriched_posts,
-            })
-
+            }
         except Exception as e:
             logger.exception(f"[main] Scrape failed for @{username}: {e}")
+            return None
+
+    import time
+    # Concurrent RSSHub requests (Reduced to 2 workers to prevent RSSHub 503 rate limits)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {}
+        for u in usernames:
+            futures[pool.submit(process_user, u)] = u
+            time.sleep(0.5)  # Stagger requests to give RSSHub breathing room
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                accounts.append(res)
 
     logger.info(f"[main] Scraped {len(accounts)} accounts from {len(usernames)} usernames")
     return accounts
@@ -386,6 +399,8 @@ def main() -> None:
     if not accounts:
         logger.warning("[main] No accounts scraped. Exiting.")
         sys.exit(0)
+
+
 
     # ── stage 3: niche filter ─────────────────────────────────────────
     accounts = stage_filter(accounts)

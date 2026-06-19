@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import requests
+from curl_cffi import requests
 
 from .utils.error_handler import retry
 from .utils.logger import get_logger
@@ -63,11 +63,21 @@ class ThreadsScraper:
         self.timeout     = int(settings.get("timeout", 30))
         self.use_offline = bool(settings.get("use_offline", False))
 
-        self._cookie = (
-            os.environ.get("THREADS_COOKIE")
-            or settings.get("cookie", "")
-            or ""
-        )
+        # Check for cookie.json first, then fallback to .env/settings
+        cookie_path = config_dir / "cookie.json"
+        if cookie_path.exists():
+            try:
+                with open(cookie_path, "r", encoding="utf-8") as f:
+                    self._cookie = f.read()
+            except Exception as e:
+                logger.error(f"Failed to read cookie.json: {e}")
+                self._cookie = ""
+        else:
+            self._cookie = (
+                os.environ.get("THREADS_COOKIE")
+                or settings.get("cookie", "")
+                or ""
+            )
 
         proxies_path    = self.data_dir / "raw" / "proxies.json"
         self._proxy_mgr = (
@@ -94,11 +104,8 @@ class ThreadsScraper:
         if self.use_offline:
             return self._load_offline_fixture(username, limit)
 
-        user_id = self._resolve_user_id(username)
-        if not user_id:
-            logger.warning(f"Could not resolve user_id for @{username}")
-            return []
-        return self._fetch_posts(user_id, username, limit)
+        # RSSHub doesn't require user_id, so we bypass the lookup completely
+        return self._fetch_posts("", username, limit)
 
     def fetch_user_profile(self, username: str) -> Dict[str, Any]:
         if self.use_offline:
@@ -128,11 +135,35 @@ class ThreadsScraper:
     # ------------------------------------------------------------------
 
     def _build_session(self) -> requests.Session:
-        session = requests.Session()
+        session = requests.Session(impersonate="chrome120")
         headers = dict(_BASE_HEADERS)
-        if self._cookie:
-            headers["Cookie"] = self._cookie
-            csrf = re.search(r"csrftoken=([^;]+)", self._cookie)
+        
+        cookie_str = self._cookie.strip() if self._cookie else ""
+        if cookie_str:
+            parsed_cookie = ""
+            # Check if it's a JSON array (e.g. from EditThisCookie)
+            if cookie_str.startswith("[") and cookie_str.endswith("]"):
+                try:
+                    cookie_list = json.loads(cookie_str)
+                    pairs = [f"{c['name']}={c['value']}" for c in cookie_list if "name" in c and "value" in c]
+                    parsed_cookie = "; ".join(pairs)
+                except Exception as e:
+                    logger.error(f"Failed to parse JSON cookie: {e}")
+                    parsed_cookie = cookie_str
+            # Check if it's a JSON object
+            elif cookie_str.startswith("{") and cookie_str.endswith("}"):
+                try:
+                    cookie_dict = json.loads(cookie_str)
+                    pairs = [f"{k}={v}" for k, v in cookie_dict.items()]
+                    parsed_cookie = "; ".join(pairs)
+                except Exception as e:
+                    logger.error(f"Failed to parse JSON dict cookie: {e}")
+                    parsed_cookie = cookie_str
+            else:
+                parsed_cookie = cookie_str
+            
+            headers["Cookie"] = parsed_cookie
+            csrf = re.search(r"csrftoken=([^;]+)", parsed_cookie)
             if csrf:
                 headers["X-CSRFToken"] = csrf.group(1)
         session.headers.update(headers)
@@ -222,7 +253,7 @@ class ThreadsScraper:
             logger.debug(f"_uid_via_search failed for @{username}: {e}")
         return None
 
-    @retry(exceptions=(requests.RequestException,), tries=2, delay=2.0, backoff=2.0)
+    @retry(exceptions=(Exception,), tries=2, delay=2.0, backoff=2.0)
     def _uid_via_graphql(self, username: str) -> Optional[str]:
         """Last resort: try GraphQL user lookup."""
         try:
@@ -261,47 +292,58 @@ class ThreadsScraper:
     def _fetch_posts(
         self, user_id: str, username: str, limit: int
     ) -> List[Dict[str, Any]]:
-        url     = f"{_API_BASE}/feed/user/{user_id}/"
-        items   = []
-        max_id  = None
-        headers = {
-            "Accept": "*/*",
-            "X-IG-App-ID": "238260118697367",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-        }
+        """Fetch posts using local RSSHub instance."""
+        import xml.etree.ElementTree as ET
+        from email.utils import parsedate_to_datetime
+        
+        # Use local RSSHub for pure content scraping (corrected 'hreads' typo to standard RSSHub route)
+        url = f"http://localhost:1200/threads/{username}"
+        items = []
+        try:
+            resp = self._session.get(url, timeout=self.timeout)
+            if resp.status_code != 200:
+                logger.warning(f"RSSHub API {resp.status_code} for @{username}")
+                return items
+            
+            root = ET.fromstring(resp.text)
+            for item in root.findall('./channel/item'):
+                title = item.find('title')
+                desc = item.find('description')
+                link = item.find('link')
+                pubDate = item.find('pubDate')
+                
+                text = desc.text if desc is not None and desc.text else (title.text if title is not None else "")
+                
+                created_at = ""
+                if pubDate is not None and pubDate.text:
+                    try:
+                        dt = parsedate_to_datetime(pubDate.text)
+                        created_at = dt.isoformat()
+                    except Exception:
+                        created_at = pubDate.text
 
-        while len(items) < limit:
-            params = {"count": min(12, limit - len(items))}
-            if max_id:
-                params["max_id"] = max_id
-            try:
-                resp = self._session.get(
-                    url, params=params, headers=headers,
-                    proxies=self._get_proxies(), timeout=self.timeout,
-                )
-                if resp.status_code != 200:
-                    logger.warning(f"Posts API {resp.status_code} for uid={user_id}")
+                code = ""
+                if link is not None and link.text:
+                    match = re.search(r'/post/([^/?]+)', link.text)
+                    if match:
+                        code = match.group(1)
+
+                items.append({
+                    "id": code or f"rss_{len(items)}",
+                    "username": username,
+                    "text": text,
+                    "like_count": 0,
+                    "reply_count": 0,
+                    "repost_count": 0,
+                    "created_at": created_at,
+                    "url": link.text if link is not None else "",
+                })
+                if len(items) >= limit:
                     break
-                data = resp.json()
-            except Exception as e:
-                logger.error(f"Post fetch failed uid={user_id}: {e}")
-                break
-
-            raw = data.get("items") or []
-            for item in raw:
-                p = self._normalize_post(item, username)
-                if p:
-                    items.append(p)
-
-            if not data.get("more_available") or not raw:
-                break
-            max_id = data.get("next_max_id")
-            if not max_id:
-                break
-            self._polite_delay()
-
-        logger.info(f"@{username}: fetched {len(items)} posts")
+        except Exception as e:
+            logger.error(f"RSSHub fetch failed for @{username}: {e}")
+            
+        logger.info(f"@{username}: fetched {len(items)} posts from RSSHub")
         return items[:limit]
 
     def _normalize_post(
