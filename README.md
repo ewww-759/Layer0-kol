@@ -29,7 +29,17 @@ Meta restricts unauthenticated searches. You must provide a valid Threads cookie
 3. Refresh and find the `cookie:` string in the Request Headers.
 4. Create a file at `config/cookie.json` and paste your entire raw cookie string into it.
 
-### 5. Run the Pipeline
+### 5. Configure LLM (Optional but Recommended)
+Layers 3-5 use an LLM for deep content analysis and personalized outreach. You can choose between cloud APIs or local Ollama.
+
+1. Copy `config/llm_config.yaml.example` to `config/llm_config.yaml`.
+2. Set `backend` to `"openai"`, `"gemini"`, or `"ollama"`.
+3. For cloud backends, set the API key in the YAML or via env vars (`OPENAI_API_KEY` / `GEMINI_API_KEY`).
+4. For local Ollama, ensure the Ollama server is running at `http://localhost:11434`.
+
+> **Note:** The pipeline runs fine without LLM — it falls back to keyword filtering and template-based outreach.
+
+### 6. Run the Pipeline
 Once your configuration is ready, launch the pipeline:
 ```bash
 python src/main.py --mode discover
@@ -39,5 +49,8 @@ The system will:
 1. Read keywords from `config/niche_config.yaml`.
 2. Discover seed accounts using your cookie.
 3. Rapidly scrape recent posts via your local RSSHub.
-4. Pass the data through the filtering and scoring layers.
-5. Output the final high-value leads to the `output/` directory.
+4. Filter accounts by niche relevance (keywords + LLM validation).
+5. Score accounts using heuristic signals + LLM semantic analysis.
+6. Generate personalized outreach messages via LLM.
+7. Output the final high-value leads to the `output/` directory.
+
