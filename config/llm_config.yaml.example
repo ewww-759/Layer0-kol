@@ -1,0 +1,27 @@
+# LLM Configuration
+# -----------------
+# Switch between cloud APIs and local Ollama models.
+
+# Backend: "openai", "gemini", or "ollama"
+backend: "gemini"
+
+# OpenAI settings
+openai:
+  api_key: ""           # Or set OPENAI_API_KEY env var
+  model: "gpt-4o-mini"
+  temperature: 0.3
+  max_tokens: 1024
+
+# Google Gemini settings
+gemini:
+  api_key: ""           # Or set GEMINI_API_KEY env var
+  model: "gemini-2.0-flash"
+  temperature: 0.3
+  max_tokens: 1024
+
+# Ollama settings (local)
+ollama:
+  base_url: "http://localhost:11434"
+  model: "llama3"
+  temperature: 0.3
+  max_tokens: 1024
