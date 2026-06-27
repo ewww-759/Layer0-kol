@@ -49,6 +49,8 @@ from scraper.niche_filter import NicheFilter
 from scraper.monetization_scorer import MonetizationScorer
 from scraper.outreach_manager import OutreachManager
 from scraper.exporter import Exporter
+from scraper.llm_client import LLMClient
+from scraper.llm_scorer import LLMScorer
 from scraper.utils.logger import get_logger
 
 ROOT       = Path(__file__).resolve().parents[1]
@@ -241,10 +243,13 @@ def stage_scrape(
 
 def stage_filter(
     accounts: List[Dict[str, Any]],
+    llm_scorer: LLMScorer = None,
 ) -> List[Dict[str, Any]]:
     """
-    Apply NicheFilter to drop accounts that don't match the niche.
-    Skipped if niche_config.yaml has no bio/post keywords defined.
+    Two-pass niche filter:
+      Pass 1 — keyword regex (fast, free, eliminates obvious mismatches)
+      Pass 2 — LLM deep validation (if available, catches subtle niche accounts
+               that keywords miss, and removes false positives)
     """
     niche_config = CONFIG_DIR / "niche_config.yaml"
     nf = NicheFilter(config_path=niche_config if niche_config.exists() else None)
@@ -254,10 +259,28 @@ def stage_filter(
         logger.info("[main] No niche keywords configured — skipping niche filter")
         return accounts
 
+    # Pass 1: fast keyword filter
     filtered = nf.filter_many(accounts)
     logger.info(
-        f"[main] Niche filter: {len(filtered)}/{len(accounts)} accounts passed"
+        f"[main] Niche filter (keyword pass): {len(filtered)}/{len(accounts)} accounts passed"
     )
+
+    # Pass 2: LLM deep validation (if available)
+    if llm_scorer and filtered:
+        logger.info("[main] Running LLM deep niche validation...")
+        filtered = llm_scorer.score_many(filtered)
+        # Remove accounts the LLM flagged as low niche relevance (<30)
+        before = len(filtered)
+        filtered = [
+            a for a in filtered
+            if a.get("llm_analysis", {}).get("niche_relevance", 50) >= 30
+        ]
+        dropped = before - len(filtered)
+        if dropped:
+            logger.info(
+                f"[main] LLM niche validation dropped {dropped} low-relevance accounts"
+            )
+
     return filtered
 
 
@@ -268,19 +291,34 @@ def stage_filter(
 def stage_score(
     accounts: List[Dict[str, Any]],
     min_tier: str,
+    llm_scorer: LLMScorer = None,
 ) -> List[Dict[str, Any]]:
     """
-    Score all niche-confirmed accounts and return the shortlist
-    filtered to min_tier and above.
+    Hybrid scoring pipeline:
+      1. Heuristic scoring (MonetizationScorer) — math-based signals
+      2. LLM scoring (LLMScorer) — semantic content analysis (if available)
+    Both scores are attached to each account for downstream use.
     """
+    # Step 1: Heuristic scoring (always runs — free, fast)
     scorer  = MonetizationScorer(config_path=CONFIG_DIR / "scorer.yaml")
     results = scorer.score_many(accounts)
     leads   = scorer.filter(results, min_tier=min_tier)
 
     logger.info(
-        f"[main] Scored {len(results)} accounts | "
+        f"[main] Heuristic scored {len(results)} accounts | "
         f"{len(leads)} qualify at {min_tier}+"
     )
+
+    # Step 2: LLM deep analysis (only on leads to save API costs)
+    if llm_scorer and leads:
+        logger.info(
+            f"[main] Running LLM deep analysis on {len(leads)} qualified leads..."
+        )
+        # Only run LLM on accounts that don't already have llm_analysis
+        leads = llm_scorer.score_many([
+            a for a in leads if "llm_analysis" not in a
+        ]) + [a for a in leads if "llm_analysis" in a]
+
     return results, leads
 
 
@@ -292,15 +330,20 @@ def stage_outreach(
     leads:    List[Dict[str, Any]],
     accounts: List[Dict[str, Any]],
     min_tier: str,
+    llm_scorer: LLMScorer = None,
 ) -> None:
     """
-    Build, interactively review, and export the outreach queue.
+    Build outreach queue with LLM-generated personalized messages.
+    Falls back to template-based messages if LLM is unavailable.
     """
-    # Build a username → profile lookup for OutreachManager
-    profiles = {
-        a["profile"]["username"]: a["profile"]
+    # Build a username → account lookup
+    account_map = {
+        a["profile"]["username"]: a
         for a in accounts
         if a.get("profile", {}).get("username")
+    }
+    profiles = {
+        uname: a["profile"] for uname, a in account_map.items()
     }
 
     om    = OutreachManager(config_path=CONFIG_DIR / "outreach.yaml")
@@ -312,6 +355,32 @@ def stage_outreach(
     if not queue:
         logger.info("[main] Outreach queue is empty — no accounts qualified")
         return
+
+    # Upgrade queue with LLM-generated messages (if available)
+    if llm_scorer:
+        logger.info("[main] Generating LLM-personalized outreach messages...")
+        for draft in queue:
+            username = draft.get("username", "")
+            acc = account_map.get(username, {})
+            profile = acc.get("profile", {})
+            posts = acc.get("posts", [])
+            tier = draft.get("kol_tier", "B-tier")
+            score_result = acc.get("llm_analysis", {})
+
+            if profile:
+                llm_msg = llm_scorer.generate_outreach(
+                    profile=profile,
+                    posts=posts,
+                    tier=tier,
+                    score_result=score_result,
+                )
+                if llm_msg:
+                    # Store LLM message; keep original template as fallback
+                    draft["llm_message"] = llm_msg
+                    draft["message"] = llm_msg
+        logger.info(
+            f"[main] LLM outreach generation complete for {len(queue)} drafts"
+        )
 
     # Show summary before review
     summary = om.queue_summary(queue)
@@ -358,6 +427,33 @@ def main() -> None:
     parser    = ThreadsParser()
     exporter  = Exporter(output_dir=OUTPUT_DIR, data_dir=DATA_DIR)
 
+    # ── initialise LLM modules (optional — gracefully skipped if unavailable)
+    llm_scorer = None
+    llm_config_path = CONFIG_DIR / "llm_config.yaml"
+    if llm_config_path.exists():
+        try:
+            llm_client = LLMClient(config_path=llm_config_path)
+            if llm_client.is_available():
+                # Read niche name from niche_config
+                niche_cfg = CONFIG_DIR / "niche_config.yaml"
+                niche_name = "general"
+                if niche_cfg.exists():
+                    import yaml as _y
+                    with open(niche_cfg, "r", encoding="utf-8") as _f:
+                        niche_name = (_y.safe_load(_f) or {}).get("niche", "general")
+                llm_scorer = LLMScorer(llm_client, niche=niche_name)
+                logger.info(
+                    f"[main] LLM enabled | backend={llm_client.backend} niche={niche_name}"
+                )
+            else:
+                logger.warning(
+                    "[main] LLM backend not available — running without AI analysis"
+                )
+        except Exception as e:
+            logger.warning(f"[main] LLM init failed: {e} — running without AI analysis")
+    else:
+        logger.info("[main] No llm_config.yaml found — running without AI analysis")
+
     # ── stage 1: discover or use explicit username list ───────────────
     if args.mode == "discover":
         logger.info("[main] Mode: discover — finding seeds via keyword search")
@@ -403,14 +499,14 @@ def main() -> None:
 
 
     # ── stage 3: niche filter ─────────────────────────────────────────
-    accounts = stage_filter(accounts)
+    accounts = stage_filter(accounts, llm_scorer=llm_scorer)
 
     if not accounts:
         logger.warning("[main] All accounts filtered as off-niche. Exiting.")
         sys.exit(0)
 
     # ── stage 4: score ────────────────────────────────────────────────
-    all_results, leads = stage_score(accounts, min_tier=args.min_tier)
+    all_results, leads = stage_score(accounts, min_tier=args.min_tier, llm_scorer=llm_scorer)
 
     # ── export raw scored results ─────────────────────────────────────
     scored_path = OUTPUT_DIR / "scored_results.json"
@@ -444,6 +540,7 @@ def main() -> None:
             leads=leads,
             accounts=accounts,
             min_tier=args.min_tier,
+            llm_scorer=llm_scorer,
         )
     elif args.no_outreach:
         logger.info("[main] --no-outreach flag set. Skipping outreach stage.")

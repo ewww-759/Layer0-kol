@@ -71,6 +71,9 @@ data/raw/*
 
 # Secrets and Local Configurations
 config/cookie.json
+config/llm_config.yaml
+test_search.html
+test_search_auth.html
 
 
 # Local Output
