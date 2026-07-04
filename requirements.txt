@@ -5,3 +5,4 @@ python-dotenv>=1.0.1
 curl_cffi>=0.7.0
 google-genai>=1.0.0
 openai>=1.30.0
+playwright>=1.44.0
