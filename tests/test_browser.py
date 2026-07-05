@@ -1,8 +1,8 @@
 """
 test_browser.py
 ===============
-Quick smoke test for BrowserManager stealth launch.
-Navigates to a fingerprint detection site to verify anti-detection patches.
+Smoke test for BrowserManager stealth launch + NetworkInterceptor.
+Navigates to Threads to verify anti-detection patches and GraphQL capture.
 
 Usage:
     python tests/test_browser.py
@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from scraper.browser_manager import BrowserManager
+from scraper.network_interceptor import NetworkInterceptor
 
 
 async def main(proxy: str | None, headless: bool) -> None:
@@ -39,7 +40,14 @@ async def main(proxy: str | None, headless: bool) -> None:
         headless=headless,
     )
 
+    # Create interceptor and attach BEFORE navigation
+    interceptor = NetworkInterceptor()
+
     page = await mgr.launch()
+
+    # Attach interceptor to browser context
+    interceptor.attach(mgr.context)
+    print(f"\n  Interceptor attached | watching {len(interceptor.list_fingerprints())} GraphQL patterns")
 
     # Test 1: Check navigator.webdriver is hidden
     print("\n[Test 1] navigator.webdriver ...")
@@ -79,6 +87,26 @@ async def main(proxy: str | None, headless: bool) -> None:
         print(f"  Page title : {await page.title()}")
     except Exception as e:
         print(f"  Navigation error: {e}  [FAIL]")
+
+    # Test 6: Check interceptor stats after page load
+    print("\n[Test 6] NetworkInterceptor stats ...")
+    await asyncio.sleep(3)  # Allow background responses to settle
+    stats = interceptor.stats
+    captures = await interceptor.get_captures()
+    print(f"  Total responses seen   : {stats['total_responses_seen']}")
+    print(f"  Skipped (resource type): {stats['skipped_resource_type']}")
+    print(f"  Skipped (URL pattern)  : {stats['skipped_url_pattern']}")
+    print(f"  Skipped (not GraphQL)  : {stats['skipped_not_graphql']}")
+    print(f"  Skipped (not JSON)     : {stats['skipped_not_json']}")
+    print(f"  Skipped (no match)     : {stats['skipped_no_fingerprint']}")
+    print(f"  CAPTURED               : {stats['captured']}")
+    status = "PASS" if stats['total_responses_seen'] > 0 else "WARN"
+    print(f"  Interceptor active     : [{status}]")
+
+    if captures:
+        print(f"\n  Captured {len(captures)} GraphQL responses:")
+        for cap in captures[:5]:
+            print(f"    [{cap.category.value}] {cap.matched_pattern} (HTTP {cap.status})")
 
     print("\n" + "=" * 60)
     print("  Smoke test complete. Browser will stay open for inspection.")
