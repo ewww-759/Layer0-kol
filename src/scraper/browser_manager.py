@@ -25,10 +25,12 @@ Public API
 from __future__ import annotations
 
 import json
+import os
 import random
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
+import yaml
 from playwright.async_api import (
     BrowserContext,
     Page,
@@ -176,7 +178,7 @@ class BrowserManager:
         config_dir: Path,
         *,
         profile_name: str = "default",
-        proxy: Optional[str] = None,
+        proxy: Optional[Union[str, Callable[[], Optional[str]]]] = None,
         headless: bool = False,
         user_agent: Optional[str] = None,
         viewport: Optional[Dict[str, int]] = None,
@@ -257,10 +259,11 @@ class BrowserManager:
             "java_script_enabled": True,
         }
 
-        # Configure proxy if provided
-        if self._proxy:
-            ctx_options["proxy"] = self._build_proxy_config(self._proxy)
-            logger.info(f"Browser proxy configured: {self._proxy}")
+        # Configure proxy dynamically if available
+        resolved_proxy = self._resolve_proxy()
+        if resolved_proxy:
+            ctx_options["proxy"] = self._build_proxy_config(resolved_proxy)
+            logger.info(f"Browser proxy configured: {resolved_proxy}")
 
         # Load existing cookies from config if available
         cookies_path = self._config_dir / "cookie.json"
@@ -290,18 +293,6 @@ class BrowserManager:
             self._page = self._context.pages[0]
         else:
             self._page = await self._context.new_page()
-
-        # Set extra HTTP headers for realism
-        await self._page.set_extra_http_headers({
-            "Accept-Language": f"{self._locale},en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "Sec-Ch-Ua": (
-                '"Chromium";v="148", "Google Chrome";v="148", '
-                '"Not/A)Brand";v="99"'
-            ),
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Upgrade-Insecure-Requests": "1",
-        })
 
         logger.info("Browser launched and stealth-configured successfully")
         return self._page
@@ -348,6 +339,70 @@ class BrowserManager:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _resolve_proxy(self) -> Optional[str]:
+        """
+        Dynamically resolve the proxy URL at launch time.
+        Priority:
+          1. Explicitly passed proxy (if callable, invoke it; if string, use it unless 'auto').
+          2. Environment variables: THREADS_PROXY, HTTPS_PROXY, HTTP_PROXY, ALL_PROXY.
+          3. config/settings.yaml: 'proxy', 'default_proxy', or rotating from proxies.json when 'use_proxies' is true.
+        """
+        if callable(self._proxy):
+            try:
+                res = self._proxy()
+                if res:
+                    return str(res)
+            except Exception as e:
+                logger.warning(f"Callable proxy getter failed: {e}")
+
+        # "direct" or "none" explicitly disables proxy (skips env var / config fallback)
+        if isinstance(self._proxy, str) and self._proxy.strip().lower() in ("direct", "none", "off"):
+            logger.info("Proxy explicitly disabled (direct mode)")
+            return None
+
+        if isinstance(self._proxy, str) and self._proxy.strip() and self._proxy.lower() != "auto":
+            return self._proxy.strip()
+
+        # Check environment variables
+        for env_key in ("THREADS_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+            val = os.environ.get(env_key)
+            if val and val.strip():
+                logger.info(f"Resolved proxy from env var {env_key}")
+                return val.strip()
+
+        # Check settings.yaml
+        settings_path = self._config_dir / "settings.yaml"
+        if settings_path.exists():
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = yaml.safe_load(f) or {}
+
+                # Direct proxy setting in settings.yaml
+                for key in ("proxy", "default_proxy", "threads_proxy"):
+                    val = settings.get(key)
+                    if isinstance(val, str) and val.strip():
+                        logger.info(f"Resolved proxy from settings.yaml ({key})")
+                        return val.strip()
+
+                # If use_proxies is true, try to load from data/raw/proxies.json
+                if settings.get("use_proxies", False):
+                    proxies_path = self._config_dir.parent / "data" / "raw" / "proxies.json"
+                    if proxies_path.exists():
+                        with open(proxies_path, "r", encoding="utf-8") as pf:
+                            pdata = json.load(pf)
+                        if isinstance(pdata, list) and pdata:
+                            valid_p = [p for p in pdata if isinstance(p, dict)]
+                            if valid_p:
+                                chosen = random.choice(valid_p)
+                                proxy_val = chosen.get("https") or chosen.get("http") or chosen.get("server") or next(iter(chosen.values()), None)
+                                if proxy_val and isinstance(proxy_val, str):
+                                    logger.info("Resolved proxy from data/raw/proxies.json pool")
+                                    return proxy_val.strip()
+            except Exception as e:
+                logger.warning(f"Failed to resolve proxy from config files: {e}")
+
+        return None
+
     @staticmethod
     def _build_proxy_config(proxy_url: str) -> Dict[str, str]:
         """
@@ -389,18 +444,30 @@ class BrowserManager:
             # Normalize cookies to Playwright format
             pw_cookies = []
             for c in raw_cookies:
+                # Auto-correct common domain mismatch (.threads.com → .threads.net)
+                domain = c.get("domain", ".threads.net")
+                if isinstance(domain, str):
+                    domain = domain.replace(".threads.com", ".threads.net")
+                    if domain == "threads.com":
+                        domain = ".threads.net"
+
                 cookie: Dict[str, Any] = {
                     "name": c.get("name", ""),
                     "value": c.get("value", ""),
-                    "domain": c.get("domain", ".threads.net"),
+                    "domain": domain,
                     "path": c.get("path", "/"),
                 }
                 # Handle sameSite (Playwright requires specific casing)
+                # Also normalize browser-export format "no_restriction" → "None"
                 same_site = c.get("sameSite") or "Lax"
-                if isinstance(same_site, str) and same_site.lower() in ("strict", "lax", "none"):
-                    cookie["sameSite"] = same_site.capitalize()
-                    if cookie["sameSite"] == "None":
+                if isinstance(same_site, str):
+                    normalized = same_site.lower().strip()
+                    if normalized in ("no_restriction", "none"):
                         cookie["sameSite"] = "None"
+                    elif normalized in ("strict", "lax"):
+                        cookie["sameSite"] = normalized.capitalize()
+                    else:
+                        cookie["sameSite"] = "Lax"
                 else:
                     cookie["sameSite"] = "Lax"
 
