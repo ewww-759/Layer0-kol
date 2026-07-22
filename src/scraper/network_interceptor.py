@@ -345,6 +345,18 @@ class NetworkInterceptor:
                 if c.category.value == category
             ]
 
+    def get_captures_sync(
+        self,
+        category: Optional[str] = None,
+    ) -> list[CapturedResponse]:
+        """Synchronous non-async snapshot of current captures."""
+        if category is None:
+            return list(self._captures)
+        return [
+            c for c in self._captures
+            if c.category.value == category
+        ]
+
     async def get_captures_as_dicts(
         self,
         category: Optional[str] = None,
